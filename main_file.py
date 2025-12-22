@@ -377,7 +377,7 @@ async def paginate_problems(callback: CallbackQuery):
 def get_next_problem_id():
     #100% unique id
     _2025start = 1735689600  
-    return int((time.time() - _2025start))/4
+    return int((time.time() - _2025start))//4
 
 def get_problems_path(user_id):
     return Path(f"user_data/{user_id}/problems.json")
@@ -679,7 +679,7 @@ async def way_start(callback: CallbackQuery):
         [InlineKeyboardButton(text="Images", callback_data="way:graphix")]
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback.message.edit_text("Select the notification method:")
+    await callback.message.edit_text("Select the notification method:",reply_markup=kb)
     await callback.answer()
 
 
