@@ -2,7 +2,7 @@ CONST_COUNT_TASKS_PER_PAGE = 3
 import asyncio
 import json
 from zoneinfo import ZoneInfo
-import datetime
+from datetime import datetime, timedelta
 import os
 import time #Только для генерации idшников
 from pathlib import Path
@@ -166,11 +166,11 @@ async def receive_global_text(message: Message, state: FSMContext, bot):
 
 def format_task(task, user_tz, index): 
     try:
-        utc_dt = datetime.datetime.fromisoformat(task["deadline"].rstrip("Z"))
+        utc_dt = datetime.fromisoformat(task["deadline"].rstrip("Z"))
         local_dt = utc_dt.astimezone(user_tz)
         local_str = local_dt.strftime("%d.%m.%Y %H:%M")
         
-        now_local = datetime.datetime.now(user_tz)
+        now_local = datetime.now(user_tz)
         if local_dt < now_local:
             status = "Overdue"
         else:
@@ -474,7 +474,7 @@ async def process_deadline(message, state):
 
     
     try:
-        naive_dt = datetime.datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
+        naive_dt = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
     except ValueError:
         await message.answer("Incorrect format. Use: DD.MM.YYYY HH:MM (for example, 14.12.2025 15:30)")
         return
@@ -490,7 +490,7 @@ async def process_deadline(message, state):
         return
 
    
-    now_utc = datetime.datetime.now(pytz.utc)
+    now_utc = datetime.now(pytz.utc)
     if utc_dt <= now_utc:
         await state.clear()  
         await message.answer(
@@ -658,7 +658,7 @@ async def time_call_start(callback: CallbackQuery, state: FSMContext):
 async def time_call_save(message: Message, state: FSMContext):
     user_id = str(message.from_user.id)
     try:
-        datetime.datetime.strptime(message.text.strip(), "%H:%M")
+        datetime.strptime(message.text.strip(), "%H:%M")
         with open(f"user_data/{user_id}/preferences", "r", encoding="utf-8") as f:
             p = json.load(f)
         p["time_call"] = message.text.strip()
@@ -712,6 +712,126 @@ async def back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+def format_timedelta(td: timedelta):
+    total_seconds = int(td.total_seconds())
+    if total_seconds <= 0:
+        return "просрочено"
+    
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours} ч")
+    if minutes > 0:
+        parts.append(f"{minutes} мин")
+    
+    return " ".join(parts) if parts else "менее минуты"
+
+async def check_all_users_for_deadlines(bot: Bot):
+    try:
+        with open("data/users.json", "r", encoding="utf-8") as f:
+            user_ids = json.load(f)
+    except Exception:
+        return
+
+    now_utc = datetime.now(pytz.UTC)
+
+    for user_id in user_ids:
+        try:
+            pref_path = f"user_data/{user_id}/preferences"
+            if not os.path.exists(pref_path):
+                continue
+
+            with open(pref_path, "r", encoding="utf-8") as f:
+                prefs = json.load(f)
+
+            if prefs.get("status") == "blocked":
+                continue
+
+            tz_name = prefs.get("utc_loc")
+            time_call_str = prefs.get("time_call", "00:00")
+
+            #00:00=skip
+            if time_call_str == "00:00":
+                continue
+            try:
+                h, m = map(int, time_call_str.split(":"))
+                notify_before = timedelta(hours=h, minutes=m)
+            except (ValueError, TypeError):
+                continue  
+
+            
+            problems = load_problems(user_id)
+            updated = False
+
+            for task in problems:
+                if task.get("notified"):
+                    continue
+
+                try:
+                    deadline_str = task["deadline"].rstrip("Z")
+                    deadline_utc = datetime.fromisoformat(deadline_str).replace(tzinfo=pytz.UTC)
+                except Exception:
+                    continue
+
+                
+                time_until_deadline = deadline_utc - now_utc
+
+                
+                if time_until_deadline.total_seconds() <= 0:
+                    continue
+
+                
+                notify_threshold = deadline_utc - notify_before
+
+                
+                if now_utc >= notify_threshold:
+                    try:
+                    
+                        if tz_name:
+                            try:
+                                user_tz = pytz.timezone(tz_name)
+                                local_deadline = deadline_utc.astimezone(user_tz)
+                                deadline_str_local = local_deadline.strftime("%d.%m %H:%M")
+                            except:
+                                deadline_str_local = deadline_utc.strftime("%d.%m %H:%M UTC")
+                        else:
+                            deadline_str_local = deadline_utc.strftime("%d.%m %H:%M UTC")
+
+                        time_left_str = format_timedelta(time_until_deadline)
+                        
+                        msg = (
+                            f"🔔 <b>Task Reminder!</b>\n\n"
+                            f"<b>{task['name']}</b>\n"
+                            f"Deadline: {deadline_str_local}\n"
+                            f"Time remaining: {time_left_str}\n"
+                            f"Description: {task['description']}"
+                        )
+                        await bot.send_message(chat_id=user_id, text=msg, parse_mode="HTML")
+                        task["notified"] = True
+                        updated = True
+
+                    except TelegramForbiddenError:
+                        prefs["status"] = "blocked"
+                        with open(pref_path, "w", encoding="utf-8") as f:
+                            json.dump(prefs, f, ensure_ascii=False, indent=2)
+                        break
+                    except Exception:
+                        pass  
+
+            if updated:
+                save_problems(user_id, problems)
+
+        except Exception as e:
+            print(f"Ошибка при обработке пользователя {user_id}: {e}")
+            continue
+
+
+async def deadline_notifier_loop(bot: Bot):
+    while True:
+        await check_all_users_for_deadlines(bot)
+        await asyncio.sleep(60)  
 
 
 async def main():
@@ -719,7 +839,18 @@ async def main():
     if not os.path.exists(reports_dir):
         os.makedirs(reports_dir)
     await bot.send_message(chat_id="5130574101",text="Code is working")
-    await dp.start_polling(bot)
+
+    notifier_task = asyncio.create_task(deadline_notifier_loop(bot))
+    print("working")
+    try:
+        await dp.start_polling(bot)
+    finally:
+        notifier_task.cancel()
+        try:
+            await notifier_task
+        except asyncio.CancelledError:
+            pass
+
 
 
 if __name__ == "__main__":
