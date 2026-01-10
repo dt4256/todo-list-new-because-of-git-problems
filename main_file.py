@@ -57,7 +57,7 @@ dp = Dispatcher()
 
 
 
-with open("data/timezones.json", "r", encoding="utf-8") as f:
+with open("data/Timezones.json", "r", encoding="utf-8") as f:
     TIMEZONES = json.load(f)
 
 @dp.message(Command("status"))
