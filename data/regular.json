@@ -1,16 +1,5 @@
 [
-  {
-    "id": 8075981,
-    "name": "no",
-    "description": "nonono",
-    "deadline": "2026-01-09T21:20:00Z",
-    "time_to_do": "2 ч 30 мин",
-    "importance": 2,
-    "consequence": "f",
-    "kat1": "none",
-    "notified": true
-  },
-  {
+    {
     "id": 8529343,
     "name": "Егэ блять",
     "description": "А",
